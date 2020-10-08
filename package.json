@@ -1,0 +1,33 @@
+{
+  "name": "@noseratio/torikeshi-async",
+  "version": "0.1.1",
+  "description": "cancellable promise, cancellation token, async lock, async queue, async coroutines",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js"],
+  "scripts": {
+    "test": "node --expose-internals test.js",
+    "demo": "node --expose-internals demo.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noseratio/torikeshi-async.git"
+  },
+  "keywords": [
+    "promise",
+    "cancellation",
+    "async",
+    "await",
+    "coroutine"
+  ],
+  "author": "Andrew Nosenko",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/noseratio/torikeshi-async/issues"
+  },
+  "homepage": "https://github.com/noseratio/torikeshi-async#torikeshi-async",
+  "devDependencies": {
+    "eslint": "^7.5.0",
+    "jest": "^26.4.2"
+  }
+}
