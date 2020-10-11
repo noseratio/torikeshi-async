@@ -60,7 +60,7 @@ export class Delay extends Promise {
    * @param {CancellationToken} token - Cancellation token.
    */
   constructor(timeout, token) {
-    if (!CancellationToken.canBeCanceled(token)) {
+    if (!CancellationToken.canBeCancelled(token)) {
       super(resolve => timeout !== INFINITE? 
         setTimeout(resolve, timeout): 
         undefined);
@@ -93,7 +93,7 @@ export class Deferred {
   #promise = null;
   #isCompleted = false;
   #isFaulted = false;
-  #isCanceled = false;
+  #isCancelled = false;
 
   #resove = null;
   #reject = null;
@@ -119,7 +119,7 @@ export class Deferred {
       this.#cancel = () => {
         if (!this.#isCompleted) {
           this.#isCompleted = true;
-          this.#isCanceled = true;
+          this.#isCancelled = true;
           reject(new CancelledError());
         }
       }
@@ -134,8 +134,8 @@ export class Deferred {
     return this.#isFaulted;    
   }
 
-  get isCanceled() {
-    return this.#isCanceled;    
+  get isCancelled() {
+    return this.#isCancelled;    
   }
 
   get promise() {
@@ -164,12 +164,13 @@ export class CancelledError extends Error {
   }
 
   static throwUnlessCancelled(error, log) {
+    ensureError(error);
     if (error instanceof CancelledError) {
       return log? log(error): error;
     }
     if (error instanceof AggregateError) {
       // see if all are instances of CancelledError
-      const errors = [...error.errors];
+      const errors = [...error.flatten()];
       if (errors.some(e => !(e instanceof CancelledError))) {
         throw error;
       }
@@ -186,7 +187,7 @@ export class CancelledError extends Error {
  * Class representing a CancellationTokenSource.
  */
 export class CancellationTokenSource {
-  #isCanceled = false;
+  #isCancelled = false;
   #token = null;
   #regos = new Map();
   #linkedRegos = null;
@@ -196,12 +197,12 @@ export class CancellationTokenSource {
 
   constructor(...linkedTokens) {
     this.#cancel = () => {
-      if (this.#isCanceled) {
+      if (this.#isCancelled) {
         return;
       }
-      this.#isCanceled = true;
-      for (let onCanceled of this.#regos.values()) {
-        onCanceled();
+      this.#isCancelled = true;
+      for (const onCancelled of this.#regos.values()) {
+        onCancelled();
       }
     }
 
@@ -216,8 +217,8 @@ export class CancellationTokenSource {
 
     if (linkedTokens.length != 0) {
       this.#linkedRegos = [];
-      for (let token of linkedTokens) {
-        if (CancellationToken.canBeCanceled(token)) {
+      for (const token of linkedTokens) {
+        if (CancellationToken.canBeCancelled(token)) {
           const rego = token.register(this.#cancel);
           this.#linkedRegos.push(rego);
         }
@@ -228,17 +229,17 @@ export class CancellationTokenSource {
     }
 
     this.#token = new CancellationToken({    
-      canceled: () => this.isCancellationRequested,
-      register: onCanceled => {
+      cancelled: () => this.isCancellationRequested,
+      register: onCancelled => {
         const rego = { unregister: () => this.#regos.delete(rego) };
-        this.#regos.set(rego, onCanceled);
+        this.#regos.set(rego, onCancelled);
         return rego;
       }
     });
   }
 
   get isCancellationRequested() { 
-    return this.#isCanceled; 
+    return this.#isCancelled; 
   } 
 
   get token() { 
@@ -265,8 +266,8 @@ export class CancellationToken {
   };
   
   static #defaultSource = { 
-    canceled: () => true,
-    register: onCanceled => CancellationToken.#defaultRego
+    cancelled: () => true,
+    register: onCancelled => CancellationToken.#defaultRego
   };
 
   #source = null;
@@ -275,7 +276,7 @@ export class CancellationToken {
     this.#source = source ?? CancellationToken.#defaultSource;
   }
 
-  static canBeCanceled(token) {
+  static canBeCancelled(token) {
     if (token === null || token === undefined) {
       return false;
     }
@@ -290,7 +291,7 @@ export class CancellationToken {
   }
 
   get isCancellationRequested() {
-    return this.#source.canceled();
+    return this.#source.cancelled();
   }
 
   throwIfCancellationRequested() {
@@ -299,12 +300,12 @@ export class CancellationToken {
     }
   }
 
-  register(onCanceled) {
+  register(onCancelled) {
     if (this.isCancellationRequested) {
-      onCanceled();
+      onCancelled();
       return CancellationToken.#defaultRego;
     }
-    return this.#source.register(onCanceled);
+    return this.#source.register(onCancelled);
   }
 }
 
@@ -315,7 +316,7 @@ export class AsyncLock {
   #deferred = null;
 
   async wait() {
-    verifyThis(this, AsyncLock);    
+    ensureThis(this, AsyncLock);    
     while(true) {
       const deferred = this.#deferred;
       if (!deferred) {
@@ -327,7 +328,7 @@ export class AsyncLock {
   }
 
   release() {
-    verifyThis(this, AsyncLock);    
+    ensureThis(this, AsyncLock);    
     const deferred = this.#deferred;
     if (deferred) {
       this.#deferred = null;
@@ -342,29 +343,38 @@ export class AsyncLock {
 /**
  * Class representing an AggregateError
  */
-class AggregateError extends Error {
+export class AggregateError extends Error {
   #errors = [];
 
-	constructor(errors, message) {
-		super(message ?? "One ore more errors occured");
+  constructor(errors, message) {
+    super(message ?? "One ore more errors occured");
 
     for (const error of errors) {
-      if (!(error instanceof Error)) {
-        throw new TypeError(`Must be an instance of Error`);
-      }
+      ensureError(error);
       this.#errors.push(error);
     }
-	}
+  }
 
   get errors() {
     return this[Symbol.iterator]();
   }
 
-	* [Symbol.iterator]() {
-		for (const error of this.#errors) {
-			yield error;
-		}
-	}
+  *flatten() {
+    for (const e of this.errors) {
+      if (e instanceof AggregateError) {
+        yield* e.flatten();
+      }
+      else {
+        yield e;
+      }
+    }
+  }
+
+  *[Symbol.iterator]() {
+    for (const e of this.#errors) {
+      yield e;
+    }
+  }
 }
 
 /**
@@ -379,12 +389,12 @@ export class AsyncQueue {
   }
 
   clear() {
-    verifyThis(this, AsyncQueue);    
+    ensureThis(this, AsyncQueue);    
     this.#buffer.length = 0;
   }
 
   write(...items) {
-    verifyThis(this, AsyncQueue);    
+    ensureThis(this, AsyncQueue);    
     this.#buffer.push(...items)
     const deferred = this.#deferred;
     if (deferred) {
@@ -394,7 +404,7 @@ export class AsyncQueue {
   }
 
   async read() {
-    verifyThis(this, AsyncQueue);    
+    ensureThis(this, AsyncQueue);    
     while (this.#buffer.length === 0) {
       if (this.#deferred) {
         await this.#deferred;
@@ -452,7 +462,7 @@ export class AsyncOperation {
   #promise = null; // Promise
 
   cancel() {
-    verifyThis(this, AsyncOperation);    
+    ensureThis(this, AsyncOperation);    
     this.#cts?.cancel();
   }
 
@@ -551,8 +561,13 @@ export async function* streamAnyEvents(subscribe, unsubscribe, token, mapEvent) 
           yield await queue.shift();
         }
         deferred = new Deferred();
-        await deferred.promise;
-        deferred = null;
+        try {
+          token.throwIfCancellationRequested();          
+          await deferred.promise;
+        }
+        finally {
+          deferred = null;
+        }
       }      
     } 
     finally {
@@ -628,10 +643,51 @@ export function throwUnlessCancelled(error, log) {
 }
 
 /**
+ * Function createFinalizers
+ */
+export function createFinalizers() {
+  let finalizerList = []; 
+  return {
+    add: f => {
+      if (!(f instanceof Function)) {
+        throw new TypeError("A function expected.");
+      }
+      finalizerList.push(f);
+    },
+
+    executeAsync: async () => {
+      if (!finalizerList) {
+        throw new Error("Unexpected call.");
+      }
+
+      const list = finalizerList;
+      finalizerList = null;
+      await run();
+
+      async function run() {
+        try {
+          while(list.length) {
+            const f = list.pop();
+            await f();
+          }
+        }
+        finally {
+          if (list.length) {
+            await run();
+          }
+        }
+      };
+    }
+  }
+}
+
+/**
  * Function logWarning
  */
 export function logWarning(error) {
-  console.warn(error.message);
+  for (const e of flattenErrors(error)) {
+    console.warn(e.message);
+  }
   return error;
 }
 
@@ -639,13 +695,8 @@ export function logWarning(error) {
  * Function logError
  */
 export function logError(error) {
-  if (error instanceof AggregateError) {
-    for (const e in error.errors) {
-      console.error(e);
-    }
-  }
-  else {
-    console.error(error);
+  for (const e of flattenErrors(error)) {
+    console.error(e);
   }
   return error;
 }
@@ -684,16 +735,19 @@ export async function runWithCancellation(callback, token) {
 /**
  * Function cancelWhenAnyFails
  */
-export async function cancelWhenAnyFails(iterable, cancel) {
-  const tasks = [...iterable];
+export async function cancelWhenAnyFails(iterablePromises, cancel) {
+  const promises = [...iterablePromises];
+
   // this bails of any of the promises is rejected
   let succeeded = false;
-  await Promise.all(tasks).then(() => succeeded = true, cancel);
+  await Promise.all(promises).then(() => succeeded = true, cancel);
   if (succeeded) {
     return;
   }
+
   // this resolves when any of the promises are either fulfilled or rejected 
-  const results = await Promise.allSettled(tasks);
+  const results = await Promise.allSettled(promises);
+
   // make an AggregateError of all errors
   const errors = [];
   let allCancelled = true;
@@ -705,20 +759,22 @@ export async function cancelWhenAnyFails(iterable, cancel) {
   }
   if (errors.length) {
     throw allCancelled?
-      new CancelledError("One or more operations cancelled"):
+      new CancelledError(`${cancelWhenAnyFails.name} cancelled`):
       new AggregateError(errors);
   }
-  // all settled without errors
+
+  // we're not supposed to end up here
+  throw new Error(cancelWhenAnyFails.name);
 }
 
 /**
- * Function runWorkflowTask(taskFunc, token)
+ * Function runWorkflow
  */
-export async function runWorkflowTask(taskFunc, token) {
+export async function runWorkflow(token, workflowFunc) {
   const cts = new CancellationTokenSource(token);
   let succeeded = false;
   try {
-    const result = await taskFunc(cts.token);
+    const result = await workflowFunc(cts.token);
     succeeded = true;
     return result;
   } 
@@ -730,8 +786,115 @@ export async function runWorkflowTask(taskFunc, token) {
   }
 }
 
-// helper
-function verifyThis(instance, classType) {
+/**
+ * Function runMultipleWorkflows
+ */
+export async function runMultipleWorkflows(iterableFuncs, token) {
+  const cts = new CancellationTokenSource(token);
+  try {
+    const funcs = [...iterableFuncs];
+    await cancelWhenAnyFails(funcs.map(f => f(cts.token)), cts.cancel);
+  }
+  finally {
+    cts.close();
+  }
+}
+
+/**
+ * Function asWorkflowFunc
+ * @param {Function} func - accepts a token as first argument
+ */
+export function asWorkflowFunc(func, ...args) {
+  return token => func(token, ...args);
+}
+
+/**
+ * Function withTry
+ */
+export function withTryCatch(func) {
+  try {
+    func();
+  }
+  catch (error) {
+    // for non-critical errors
+    logWarning(error);
+  }
+}
+
+/**
+ * Function withTryAsync
+ */
+export async function withTryCatchAsync(func) {
+  try {
+    await func();
+  }
+  catch (error) {
+    // for non-critical errors
+    logWarning(error);
+  }
+}
+
+/**
+ * Function flattenErrors
+  */
+function* flattenErrors(error) {
+  ensureError(error);
+  if (error instanceof AggregateError) {
+    yield* error.flatten();
+  }
+  else {
+    yield error;
+  }
+}
+
+/**
+ * Function isCancelledError 
+ */
+export function isCancelledError(error) {
+  ensureError(error);
+  return error instanceof CancelledError;
+}
+
+/**
+ * Function isAllCancelled {
+ */
+export function isAllCancelled(error) {
+  ensureError(error);
+  if (error instanceof CancelledError) {
+    return true;
+  }
+  if (!(error instanceof AggregateError)) {
+    return false;
+  }
+  // see if all instances are of CancelledError
+  for (const e of error.flatten()) {
+    if (!(e instanceof CancelledError))
+      return false;
+  }
+  return true;
+}
+
+/**
+ * Function allNonCancelled {
+ */
+export function* allNonCancelled(error) {
+  ensureError(error);
+  for (const e of flattenErrors(error)) {
+    if (!(e instanceof CancelledError)) {
+      yield e;
+    }
+  }
+}
+
+// helper to verify if error is instance of Error 
+function ensureError(error) {
+  if (!(error instanceof Error)) {
+    throw new TypeError(`Must be an instance of Error`);
+  }
+}
+
+// helper to verify "this" object's class
+function ensureThis(instance, classType) {
   if (!(instance instanceof classType)) {
     throw new TypeError(`Invalid "this", must be an instance of class "${A.name}"`);
   }
