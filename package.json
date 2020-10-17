@@ -1,10 +1,12 @@
 {
   "name": "@noseratio/torikeshi-async",
-  "version": "0.1.1",
+  "version": "0.1.1-alpha",
   "description": "cancellable promise, cancellation token, async lock, async queue, async coroutines",
   "type": "module",
   "main": "index.js",
-  "files": ["index.js"],
+  "files": [
+    "index.js"
+  ],
   "scripts": {
     "test": "node --expose-internals test.js",
     "demo": "node --expose-internals demo.js"
@@ -27,7 +29,7 @@
   },
   "homepage": "https://github.com/noseratio/torikeshi-async#torikeshi-async",
   "devDependencies": {
-    "eslint": "^7.5.0",
-    "jest": "^26.4.2"
+    "eslint": "^7.11.0",
+    "jest": "^26.5.3"
   }
 }

@@ -1,11 +1,11 @@
-import * as tasync from "./index.js";
+import * as ta from "./index.js";
 import EventEmitter from 'events';
 import et from 'internal/event_target';
 
 async function test_Delay() {
   // delay
-  var delay = new tasync.Delay(500); 
-  console.log(delay instanceof tasync.Delay);
+  var delay = new ta.Delay(500); 
+  console.log(delay instanceof ta.Delay);
   await delay;
 
   console.log("delayed")
@@ -13,16 +13,16 @@ async function test_Delay() {
 
 async function test_Deferred() {
   // deferred
-  let d = new tasync.Deferred(); setTimeout(() => d.resolve(), 500); await d;
+  let d = new ta.Deferred(); setTimeout(() => d.resolve(), 500); await d;
   console.log("resolved")
 }
 
 async function test_AsyncQueue() {
   // queue
-  let q = new tasync.AsyncQueue();
-  let p1 = q.read().then(v => v + 0.1);
-  let p2 = q.read().then(v => v + 0.2);
-  let p3 = q.read().then(v => v + 0.3);
+  let q = new ta.AsyncQueue();
+  let p1 = q.read(ta.CancellationToken.none).then(v => v + 0.1);
+  let p2 = q.read(ta.CancellationToken.none).then(v => v + 0.2);
+  let p3 = q.read(ta.CancellationToken.none).then(v => v + 0.3);
   q.write(1);
   q.write(2);
   q.write(3);
@@ -33,13 +33,13 @@ async function test_AsyncQueue() {
 
 async function test_AsyncLock() {
   // async lock
-  let asyncLock = new tasync.AsyncLock();
+  let asyncLock = new ta.AsyncLock();
   async function work(name) {
     await asyncLock.wait();
     console.log(`${name} enter`);
     try {
       for (let i = 0; i < 3; i++) {
-        await new tasync.Delay(200);
+        await new ta.Delay(200);
       }
     }
     finally {
@@ -112,8 +112,8 @@ async function test_coroutines() {
     yield 2.3;
   }
 
-  let proxy1 = new tasync.CoroutineProxy();
-  let proxy2 = new tasync.CoroutineProxy();
+  let proxy1 = new ta.CoroutineProxy();
+  let proxy2 = new ta.CoroutineProxy();
 
   let p1 = proxy1.run(() => coroutine1(proxy2.promise));
   let p2 = proxy2.run(() => coroutine2(proxy1.promise));
@@ -125,7 +125,7 @@ async function test_CancellablePromise() {
   function delayWithCancellation(timeoutMs, token) {
     console.log(`delayWithCancellation: ${timeoutMs}`);
 
-    return new tasync.CancellablePromise(d => {
+    return new ta.CancellablePromise(d => {
       const id = setTimeout(d.resolve, timeoutMs);
       d.token.register(() => {
         console.log("cleared!"); 
@@ -134,7 +134,7 @@ async function test_CancellablePromise() {
     }, token);
   }
 
-  const tokenSource = new tasync.CancellationTokenSource();
+  const tokenSource = new ta.CancellationTokenSource();
   const token = tokenSource.token;
   setTimeout(() => tokenSource.cancel(), 1500); // cancel after 1500ms
 
@@ -148,30 +148,30 @@ async function test_CancellablePromise() {
   }
   catch(e) 
   {
-    tasync.throwUnlessCancelled(e, () => console.log("Cancelled"));
+    ta.throwUnlessCancelled(e, () => console.log("Cancelled"));
   }
 }
 
 function test_CancellationTokenSource() {
   try {
-    let cts1 = new tasync.CancellationTokenSource();
+    let cts1 = new ta.CancellationTokenSource();
     cts1.token.register(() => console.log(1.1));
     let r = cts1.token.register(() => console.log(1.2));
     r.unregister();
     cts1.token.register(() => console.log(1.3));
 
-    let cts2 = new tasync.CancellationTokenSource(cts1.token);
+    let cts2 = new ta.CancellationTokenSource(cts1.token);
     cts2.token.register(() => console.log(2.1));
     cts2.token.register(() => console.log(2.2));
     cts2.token.register(() => console.log(2.3));
 
-    let cts3 = new tasync.CancellationTokenSource(cts2.token);
+    let cts3 = new ta.CancellationTokenSource(cts2.token);
     cts3.token.register(() => console.log(3.1));
     cts3.token.register(() => console.log(3.2));
     cts3.token.register(() => console.log(3.3));
     cts3.token.register(() => cts1.close());
 
-    let cts4 = new tasync.CancellationTokenSource(cts1.token);
+    let cts4 = new ta.CancellationTokenSource(cts1.token);
     cts4.token.register(() => console.log(4.1));
     cts4.token.register(() => console.log(4.2));
     cts4.token.register(() => console.log(4.3));
@@ -183,7 +183,7 @@ function test_CancellationTokenSource() {
   }
   catch(e) 
   {
-    tasync.throwUnlessCancelled(e);
+    ta.throwUnlessCancelled(e);
   }
 }
 
@@ -204,18 +204,18 @@ class TimerSource extends et.EventTarget {
 
 async function test_streamEvents() {
   const timerSource = new TimerSource(100);
-  const cts = new tasync.CancellationTokenSource();
+  const cts = new ta.CancellationTokenSource();
   setTimeout(() => cts.cancel(), 1000);
 
-  let { type } = await tasync.observeEvent(timerSource, "tick", cts.token)  
+  let { type } = await ta.observeEvent(timerSource, "tick", cts.token);  
   console.log(`observeEvent: ${type}`);
 
   try {
-    for await (let event of tasync.streamEvents(timerSource, "tick", cts.token)) {
+    for await (let event of ta.streamEvents(timerSource, "tick", cts.token)) {
       console.log(event.type);
     }    
   } catch (error) {
-    tasync.throwUnlessCancelled(error);
+    ta.throwUnlessCancelled(error);
   }
   finally {
     timerSource.close();
@@ -239,17 +239,17 @@ class NodeTimerSource extends EventEmitter {
 
 async function test_streamNodeEvents() {
   const timerSource = new NodeTimerSource(100);
-  const cts = new tasync.CancellationTokenSource();
+  const cts = new ta.CancellationTokenSource();
   setTimeout(() => cts.cancel(), 1000);
 
-  console.log(`observeNodeEvent: ${await tasync.observeNodeEvent(timerSource, "nodeTick", cts.token)}`);  
+  console.log(`observeNodeEvent: ${await ta.observeNodeEvent(timerSource, "nodeTick", cts.token)}`);  
 
   try {
-    for await (let eventName of tasync.streamNodeEvents(timerSource, "nodeTick", cts.token)) {
+    for await (let eventName of ta.streamNodeEvents(timerSource, "nodeTick", cts.token)) {
       console.log(eventName);
     }    
   } catch (error) {
-    tasync.throwUnlessCancelled(error);
+    ta.throwUnlessCancelled(error);
   }
   finally {
     timerSource.close();

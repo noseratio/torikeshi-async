@@ -26,12 +26,12 @@ export class CancellablePromise extends Promise {
         const deferred = new Deferred();
         linkedToken.register(deferred.cancel);
 
-        executor({ 
+        executor(Object.freeze({ 
           resolve: deferred.resolve,
           reject: deferred.reject,
           cancel: linkedSource.cancel,
           token: linkedToken,
-        });
+        }));
  
         return await deferred.promise;
       }
@@ -90,10 +90,15 @@ export class Delay extends Promise {
  * Class representing a Deferred.
  */
 export class Deferred {
+  static #stateFlags = class {
+    static pending = 0;
+    static completed = 1;
+    static rejected = 2;
+    static cancelled = 4;
+  }
+
+  #state = Deferred.#stateFlags.pending;
   #promise = null;
-  #isCompleted = false;
-  #isFaulted = false;
-  #isCancelled = false;
 
   #resove = null;
   #reject = null;
@@ -102,24 +107,22 @@ export class Deferred {
   constructor() {
     this.#promise = new Promise((resolve, reject) => {
       this.#resove = value => {
-        if (!this.#isCompleted) {
-          this.#isCompleted = true;
+        if (!this.isCompleted) {
+          this.#state = Deferred.#stateFlags.completed;
           resolve(value);
         }
       };
 
       this.#reject = error => {
-        if (!this.#isCompleted) {
-          this.#isCompleted = true;
-          this.#isFaulted = true;
+        if (!this.isCompleted) {
+          this.#state = Deferred.#stateFlags.completed | Deferred.#stateFlags.rejected;
           reject(error);
         }
       }
 
       this.#cancel = () => {
-        if (!this.#isCompleted) {
-          this.#isCompleted = true;
-          this.#isCancelled = true;
+        if (!this.isCompleted) {
+          this.#state = Deferred.#stateFlags.completed | Deferred.#stateFlags.cancelled;
           reject(new CancelledError());
         }
       }
@@ -127,15 +130,19 @@ export class Deferred {
   }
 
   get isCompleted() {
-    return this.#isCompleted;    
+    return (this.#state & Deferred.#stateFlags.completed) !== 0;    
   }
 
-  get isFaulted() {
-    return this.#isFaulted;    
+  get isSucceeded() {
+    return (this.#state & Deferred.#stateFlags.completed) == Deferred.#stateFlags.completed;    
+  }
+
+  get isRejected() {
+    return (this.#state & Deferred.#stateFlags.rejected) !== 0;    
   }
 
   get isCancelled() {
-    return this.#isCancelled;    
+    return (this.#state & Deferred.#stateFlags.cancelled) !== 0;    
   }
 
   get promise() {
@@ -266,7 +273,7 @@ export class CancellationToken {
   };
   
   static #defaultSource = { 
-    cancelled: () => true,
+    cancelled: () => false,
     register: onCancelled => CancellationToken.#defaultRego
   };
 
@@ -385,12 +392,18 @@ export class AsyncQueue {
   #deferred = null;
 
   get count() {
+    ensureThis(this, AsyncQueue);    
     return this.#buffer.length; 
   }
 
   clear() {
     ensureThis(this, AsyncQueue);    
     this.#buffer.length = 0;
+  }
+
+  discard() {
+    ensureThis(this, AsyncQueue);    
+    return this.#buffer.shift();
   }
 
   write(...items) {
@@ -403,18 +416,22 @@ export class AsyncQueue {
     }
   }
 
-  async read() {
-    ensureThis(this, AsyncQueue);    
-    while (this.#buffer.length === 0) {
-      if (this.#deferred) {
+  async read(token) {
+    ensureThis(this, AsyncQueue);  
+    const rego = token.register(() => this.#deferred?.cancel());
+    try {
+      if (this.#buffer.length === 0) {
+        if (!this.#deferred) {
+          this.#deferred = new Deferred();
+        }
         await this.#deferred;
       }
-      else {
-        this.#deferred = new Deferred();
-      }
+      return this.#buffer.shift();
+    }  
+    finally {
+      this.#deferred = null;
+      rego.unregister();
     }
-    this.#deferred = null;
-    return this.#buffer.shift();
   }
 }
 
@@ -431,7 +448,7 @@ export class CoroutineProxy {
 
   async* generateAsync() {
     while (true) {
-      const { value, done } = await this.#queue.read();
+      const { value, done } = await this.#queue.read(CancellationToken.none);
       if (done) break;
       yield value;
     }
@@ -509,74 +526,97 @@ export class AsyncOperation {
  * Function observeAnyEvent
  */
 
-export async function observeAnyEvent(subscribe, unsubscribe, token, mapEvent) { 
-  const deferred = new Deferred();
-  const rego = token.register(deferred.cancel);
-  try {
-    const handler = (...args) => {
-      try {
-        token.throwIfCancellationRequested();
-        deferred.resolve(mapEvent(...args));
-      } catch (error) {
-        deferred.reject(error);
-      }
-    };
-    const subscription = subscribe(handler);    
+export async function observeAnyEvent(subscribe, unsubscribe, outerToken, mapEvent) { 
+  const cts = new CancellationTokenSource(outerToken);
+  const token = cts.token;
+
+  const promise = async function observe() {
+    const deferred = new Deferred();
+    const rego = token.register(deferred.cancel);
     try {
-      return await deferred.promise;      
-    } 
-    finally {
-      unsubscribe(subscription);    
+      const handler = (...args) => {
+        try {
+          token.throwIfCancellationRequested();
+          deferred.resolve(mapEvent(...args));
+        }
+        catch (error) {
+          deferred.reject(error);
+        }
+      };
+      const subscription = subscribe(handler);    
+      try {
+        return await deferred.promise;      
+      } 
+      finally {
+        unsubscribe(subscription);    
+      }
     }
-  }
-  finally {
-    rego.unregister();
-  }    
+    finally {
+      rego.unregister();
+    }    
+  }();
+
+  return Object.freeze({
+    close: cts.cancel,
+    then: (resolve, reject) => promise.then(resolve, reject)
+  });
 }
 
 /**
  * Function streamAnyEvents
  */
-export async function* streamAnyEvents(subscribe, unsubscribe, token, mapEvent) {
-  const queue = [];
-  let deferred = null;
- 
-  const rego = token.register(() => deferred?.cancel());
-  try {
-    const handler = (...args) => {
-      try {
-        token.throwIfCancellationRequested();
-        queue.push(Promise.resolve(mapEvent(...args)));
-      } catch (error) {
-        queue.push(Promise.reject(error));
-      }
-      deferred?.resolve();
-    };
+export function streamAnyEvents(subscribe, unsubscribe, outerToken, mapEvent) {
+  const cts = new CancellationTokenSource(outerToken);
+  const token = cts.token;
 
-    const subscription = subscribe(handler);
-    try {
-      while (true) {
-        while (queue.length) {
-          token.throwIfCancellationRequested();          
-          yield await queue.shift();
-        }
-        deferred = new Deferred();
+  const stream = Object.freeze({
+    close: cts.cancel,
+
+    [Symbol.asyncIterator]: async function* asyncIterator() {
+      const queue = [];
+      let deferred = null;
+    
+      const rego = token.register(() => deferred?.cancel());
+      try {
+        const handler = (...args) => {
+          try {
+            token.throwIfCancellationRequested();
+            queue.push(Promise.resolve(mapEvent(...args)));
+          } 
+          catch (error) {
+            queue.push(Promise.reject(error));
+          }
+          deferred?.resolve();
+        };
+    
+        const subscription = subscribe(handler);
         try {
-          token.throwIfCancellationRequested();          
-          await deferred.promise;
-        }
+          while (true) {
+            while (queue.length) {
+              token.throwIfCancellationRequested();          
+              yield await queue.shift();
+            }
+            deferred = new Deferred();
+            try {
+              token.throwIfCancellationRequested();          
+              await deferred.promise;
+            }
+            finally {
+              deferred = null;
+            }
+          }      
+        } 
         finally {
-          deferred = null;
+          unsubscribe(subscription);
         }
-      }      
-    } 
-    finally {
-      unsubscribe(subscription);
+      }
+      finally {
+        rego.unregister();
+      }
     }
-  }
-  finally {
-    rego.unregister();
-  }
+  });
+
+  return stream;
 }
 
 /**
@@ -590,7 +630,7 @@ export function observeEvent(eventTarget, eventName, token, mapEvent) {
     },
     handler => eventTarget.removeEventListener(eventName, handler),
     token,
-    event => mapEvent? mapEvent(event): event)
+    event => mapEvent? mapEvent(event): event);
 }
 
 /**
@@ -646,39 +686,58 @@ export function throwUnlessCancelled(error, log) {
  * Function createFinalizers
  */
 export function createFinalizers() {
-  let finalizerList = []; 
-  return {
+  let finalizers = []; 
+
+  return Object.freeze({
     add: f => {
       if (!(f instanceof Function)) {
         throw new TypeError("A function expected.");
       }
-      finalizerList.push(f);
+      finalizers.push(f);
     },
 
-    executeAsync: async () => {
-      if (!finalizerList) {
+    runAsync: async () => {
+      if (!finalizers) {
         throw new Error("Unexpected call.");
       }
 
-      const list = finalizerList;
-      finalizerList = null;
-      await run();
-
-      async function run() {
+      const list = finalizers;
+      finalizers = null;
+      await (async function finalize() {
         try {
           while(list.length) {
-            const f = list.pop();
-            await f();
+            await (list.pop())();
           }
         }
         finally {
           if (list.length) {
-            await run();
+            await finalize();
           }
         }
-      };
+      })();
+    },
+
+    run: () => {
+      if (!finalizers) {
+        throw new Error("Unexpected call.");
+      }
+
+      const list = finalizers;
+      finalizers = null;
+      (function finalize() {
+        try {
+          while(list.length) {
+            (list.pop())();
+          }
+        }
+        finally {
+          if (list.length) {
+            finalize();
+          }
+        }
+      })();
     }
-  }
+  });
 }
 
 /**
@@ -709,6 +768,13 @@ export function cancelProof(error) {
 }
 
 /**
+ * Function asAsync(func) 
+ */
+export function asAsync(func) {
+  return async (...args) => await func(...args);
+}
+
+/**
  * Function cancelProofLog
  */
 export function cancelProofLog(log) {
@@ -718,13 +784,13 @@ export function cancelProofLog(log) {
 }
 
 /**
- * Function runWithCancellation
+ * Function withCancellation
  */
-export async function runWithCancellation(callback, token) {
+export async function withCancellation(func, token) {
   const deferred = new Deferred();
   const rego = token.register(deferred.cancel);
   try {
-    Promise.resolve(callback()).then(deferred.resolve, deferred.reject);
+    Promise.resolve(func()).then(deferred.resolve, deferred.reject);
     await deferred.promise;
   }
   finally {
@@ -759,12 +825,12 @@ export async function cancelWhenAnyFails(iterablePromises, cancel) {
   }
   if (errors.length) {
     throw allCancelled?
-      new CancelledError(`${cancelWhenAnyFails.name} cancelled`):
+      new CancelledError("Multiple operations cancelled"):
       new AggregateError(errors);
   }
 
   // we're not supposed to end up here
-  throw new Error(cancelWhenAnyFails.name);
+  throw new Error("Unexpected error");
 }
 
 /**
@@ -789,7 +855,7 @@ export async function runWorkflow(token, workflowFunc) {
 /**
  * Function runMultipleWorkflows
  */
-export async function runMultipleWorkflows(iterableFuncs, token) {
+export async function runMultipleWorkflows(token, iterableFuncs) {
   const cts = new CancellationTokenSource(token);
   try {
     const funcs = [...iterableFuncs];
